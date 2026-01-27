@@ -1,10 +1,6 @@
 package tcapi
 
-import "encoding/json"
-
-/*-------------------------------------------------------------------------------------------------*/
-// Alias for ValueType to represent a product line
-//type Product_Line ValueType
+import "github.com/gurbos/tcd/datastore"
 
 /*-------------------------------------------------------------------------------------------------*/
 
@@ -107,8 +103,8 @@ type SearchResults struct {
 type Error struct{}
 
 type Results struct {
-	Aggregations aggregations `json:"aggregations"`
-	Results      []Product    `json:"results"`
+	Aggregations aggregations        `json:"aggregations"`
+	Results      []datastore.Product `json:"results"`
 }
 
 /******************************************************************/
@@ -129,8 +125,7 @@ type ValueType struct {
 }
 
 /******************************************************************/
-
-type Product struct {
+/*type Product struct {
 	ProductLineUrlName string          `json:"productLineUrlName"`
 	ProductUrlName     string          `json:"productUrlName"`
 	RarityName         string          `json:"rarityName"`
@@ -143,7 +138,7 @@ type Product struct {
 	ProductTypeId      int             `json:"productTypeId"`
 	Number             string
 	ReleaseDate        string
-}
+}*/
 
 /******************************************************************/
 
@@ -156,6 +151,12 @@ type SearchParams struct {
 	ProductType string
 	From        int
 	Size        int
+}
+
+// SearchParams method to update SetName and Size from ValueType set info
+func (sp *SearchParams) UpdateFromSetInfo(set datastore.Set) {
+	sp.SetName = set.UrlName
+	sp.Size = int(set.Count)
 }
 
 /*-------------------------------------------------------------------------------------------------*/

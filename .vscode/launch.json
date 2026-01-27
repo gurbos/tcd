@@ -11,7 +11,8 @@
             "request": "launch",
             "mode": "auto",
             "program": "${workspaceFolder}/.",
-            "args": ["--product-line-id=36", "--sets"]
+            "args": ["--product-line-name=yugioh", "--write-data"],
+            //"showLog": true,
         }
     ]
 }

@@ -12,6 +12,11 @@ import (
 var PRODUCT_LINES_URL = "https://mp-search-api.tcgplayer.com/v1/search/productLines"
 var DATA_SEARCH_URL = "https://mp-search-api.tcgplayer.com/v1/search/request?q=&isList=false"
 
+// Maximum number of product results returned by TCGPlayer API in a single response.
+// Used by FetchProductsInParts to limit number of products requested per API call to
+// FetchProducts.
+const MAX_RESULT_SIZE = 50
+
 func InitRequest(method string, url string, body io.Reader) *http.Request {
 	req, err := http.NewRequest(method, url, body)
 	if err != nil {
@@ -79,13 +84,15 @@ func InitRequestHeader(req *http.Request) {
 }
 
 // Return a SearchParams struct initialized with default values
-func NewSearchParams() SearchParams {
+func NewSearchParams(productLine string, setName string,
+	productType string, from int, size int,
+) SearchParams {
 	params := SearchParams{
-		From:        0,
-		Size:        0,
-		ProductLine: "",
-		SetName:     "",
-		ProductType: "",
+		From:        from,
+		Size:        size,
+		ProductLine: productLine,
+		SetName:     setName,
+		ProductType: productType,
 	}
 	return params
 }
