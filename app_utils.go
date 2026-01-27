@@ -196,7 +196,7 @@ func statusWorker(id int, ctx context.Context, jobStatChan <-chan JobStatus, job
 
 		set := status.job.set
 		if status.success {
-			fmt.Printf("%-5d %-60s %-5d  Worker: %d\n", set.Id, set.Name, set.Count, status.worker)
+			fmt.Printf("%-5d %-70s %-5d  Worker: %d\n", set.Id, set.Name, set.Count, status.worker)
 		} else {
 			var pgErr *pgconn.PgError
 			if errors.As(status.err, &pgErr) {
