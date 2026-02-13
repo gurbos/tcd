@@ -2,6 +2,7 @@ package tcapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -64,7 +65,7 @@ func FetchProductLineByName(urlName string) *datastore.Product_Line {
 // Return just the search results from the response data from TCGPlayer API
 func FetchProducts(sParams SearchParams) []datastore.Product {
 	respData := FetchProductLineData(sParams)
-	return respData.Results[0].Results
+	return toProducts(respData.Results[0].Results)
 }
 
 // The TCGPlayer API limits the maximum number of results returned in a single response.
@@ -86,6 +87,27 @@ func FetchProductsInParts(sParams SearchParams) []datastore.Product {
 
 	extractProductAttributes(allResults) // Populate product info from raw JSON data
 	return allResults
+}
+
+// Fetch product image from TCGPlayer API by product Id.
+func FetchProductImageById(ctx context.Context, imageId int) ([]byte, error) {
+	client := http.Client{Timeout: 60 * time.Second}
+
+	imageUrl := fmt.Sprintf("%s%d_in_%s", BASE_IMAGE_URL, imageId, IMAGE_FORMAT_SUFFIX)
+	req, err := http.NewRequest(http.MethodGet, imageUrl, nil)
+	if err != nil {
+		return nil, fmt.Errorf("Error creating HTTP request for product image: %w", err)
+	}
+
+	res, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("Error fetching product image from TCGPlayer API: %w", err)
+	}
+	defer res.Body.Close()
+
+	var imgData bytes.Buffer
+	imgData.ReadFrom(res.Body)
+	return imgData.Bytes(), nil
 }
 
 // Extract custom product attributes from JSON raw message and populate Product struct fields.
@@ -110,4 +132,20 @@ func toSets(setsData []ValueType) (sets []datastore.Set) {
 		sets[i].Count = int(elem.Count)
 	}
 	return sets
+}
+
+func toProducts(products []Product) []datastore.Product {
+	dsp := make([]datastore.Product, len(products))
+	for i, elem := range products {
+		dsp[i].ProductId = int(elem.ProductId)
+		dsp[i].ProductLineName = elem.ProductLineName
+		dsp[i].ProductLineUrlName = elem.ProductLineUrlName
+		dsp[i].ProductName = elem.ProductName
+		dsp[i].ProductUrlName = elem.ProductUrlName
+		dsp[i].CustomAttributes = elem.CustomAttributes
+		dsp[i].SetName = elem.SetName
+		dsp[i].SetUrlName = elem.SetUrlName
+		dsp[i].RarityName = elem.RarityName
+	}
+	return dsp
 }

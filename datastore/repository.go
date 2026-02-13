@@ -8,6 +8,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+const (
+	UniqueViolationError = "23505"
+)
+
 type PostgresDataStore struct {
 	cp *pgxpool.Pool // Connection pool to the PostgreSQL database
 }
@@ -22,7 +26,7 @@ func (r *PostgresDataStore) GetProductLineByName(ctx context.Context, name strin
 	defer c.Release()
 
 	row := c.QueryRow(ctx,
-		"SELECT product_line_id, product_line_name, product_line_url_name FROM product_lines WHERE product_line_url_name=$1;", name,
+		"SELECT product_line_id, product_line_name, product_line_url_name FROM product_lines WHERE product_line_name=$1;", name,
 	)
 
 	if err := row.Scan(&productLine.Id, &productLine.Name, &productLine.UrlName); err != nil {
@@ -33,18 +37,112 @@ func (r *PostgresDataStore) GetProductLineByName(ctx context.Context, name strin
 }
 
 func (r *PostgresDataStore) GetSetsByProductLineName(ctx context.Context, name string) ([]Set, error) {
-	c, err := r.cp.Acquire(ctx)
+	// Begin a transaction with serializable isolation level
+	// which guarantees a fully consistent view of database state
+	// throughout the transaction, preventing concurrency anomolies.
+	txOptions := pgx.TxOptions{
+		IsoLevel: pgx.Serializable,
+	}
+	tx, err := r.cp.BeginTx(ctx, txOptions)
 	if err != nil {
 		return nil, fmt.Errorf("Error acquiring connection from pool: %w", err)
 	}
-	defer c.Release()
+	defer tx.Rollback(ctx)
 
-	var count int
-	if err := c.QueryRow(ctx, "SELECT COUNT(*) FROM sets").Scan(&count); err != nil {
+	// Get count of sets for the specified product line
+	var setCount int
+	if err := tx.QueryRow(ctx, "SELECT COUNT(*) FROM sets").Scan(&setCount); err != nil {
 		return nil, fmt.Errorf("Error counting sets:%w", err)
 	}
 
-	return nil, nil
+	// Query sets by product line name
+	sql := "SELECT * FROM sets WHERE product_line_name=$1;"
+	rows, err := tx.Query(ctx, sql, name)
+	if err != nil {
+		return nil, fmt.Errorf("Error querying sets by product line name %s: %w\n", name, err)
+	}
+
+	// Scan rows into set list
+	sets := make([]Set, setCount)
+	for i := 0; i < len(sets); i++ {
+		if !rows.Next() {
+			break
+		}
+		s := &sets[i]
+		err := rows.Scan(s.Id, s.Name, s.UrlName, s.Count)
+		if err != nil {
+			return nil, fmt.Errorf("Error scanning set rows for product line name %s: %w\n", name, err)
+		}
+	}
+	// Check if loop ended due to errer or end of rows
+	if rows.Err() != nil {
+		return nil, fmt.Errorf("Error iterating through set rows for product line name %s: %w\n", name, err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("Error commiting query read operations of sets for product line '%s': %w", name, err)
+	}
+
+	return sets, nil
+}
+
+func (r *PostgresDataStore) GetProductsBySetName(ctx context.Context, setName string) ([]Product, error) {
+	var rowCount int // Holds count of products for the specified set
+
+	// Begin a transaction with serializable isolation level
+	// which guarantees a fully consistent view of database state
+	// throughout the transaction, preventing concurrency anomolies.
+	txOptions := pgx.TxOptions{
+		IsoLevel: pgx.Serializable,
+	}
+
+	// Begin transaction with specified tranaction options.
+	tx, err := r.cp.BeginTx(ctx, txOptions)
+	if err != nil {
+		return nil, fmt.Errorf("Error beginning DB transaction")
+	}
+	defer tx.Rollback(ctx)
+
+	// Get count of rows to be returned in the query following this one
+	row := tx.QueryRow(ctx, "SELECT COUNT(*) FROM products WHERE set_name=$1;", setName)
+	err = row.Scan(&rowCount)
+
+	// Get all products in set specified in setName
+	sql := "SELECT * FROM products WHERE set_name=$1;"
+	rows, err := tx.Query(ctx, sql, setName)
+	if err != nil {
+		return nil, fmt.Errorf("Error querying product rows by set name '%s': %w\n", setName, err)
+	}
+
+	// Scan rows into product list
+	products := make([]Product, rowCount) // Create slice to hold products
+	var i int
+	for rows.Next() {
+		p := &products[i]
+		i++
+		err := rows.Scan(
+			&p.ProductId, &p.ProductName, &p.ProductUrlName, &p.ProductLineName,
+			&p.ProductLineUrlName, &p.RarityName, &p.CustomAttributes,
+			&p.SetName, &p.SetUrlName, &p.ProductNumber, &p.PrintEdition,
+			&p.ReleaseDate, &p.ProductLineId, &p.SetId,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("Error scanning product row for set name '%s': %w\n", setName, err)
+		}
+
+	}
+	// Check if loop ended due to errer or end of rows
+	rowsErr := rows.Err()
+	if rowsErr != nil {
+		return nil, fmt.Errorf("Error iterating through product rows for set '%s': %w\n", setName, rowsErr)
+	}
+
+	// Commit transaction
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("Error commiting query read operations")
+	}
+
+	return products, nil
 }
 
 func (r *PostgresDataStore) AddProductLine(ctx context.Context, pl *Product_Line) (*Product_Line, error) {
@@ -63,6 +161,8 @@ func (r *PostgresDataStore) AddProductLine(ctx context.Context, pl *Product_Line
 	return pl, nil
 }
 
+// AddSets adds multiple sets to the database in a single batch operation.
+// Returns the list of sets with their assigned IDs after insertion.
 func (r *PostgresDataStore) AddSets(ctx context.Context, sets []Set) ([]Set, error) {
 
 	tx, err := r.cp.Begin(ctx)
@@ -86,6 +186,7 @@ func (r *PostgresDataStore) AddSets(ctx context.Context, sets []Set) ([]Set, err
 	var isError bool // Flag to track if any errors occurred during batch execution
 	for i := 0; i < batch.Len(); i++ {
 		row := batchResults.QueryRow()
+		// Scan newly inserted rows into set list to retrieve assigned IDs
 		err := row.Scan(
 			&sets[i].Id, &sets[i].Name, &sets[i].UrlName,
 			&sets[i].Count, &sets[i].ReleaseDate, &sets[i].ProductLineId,

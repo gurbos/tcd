@@ -2,26 +2,22 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"runtime"
-	"sync"
 
 	"github.com/gurbos/tcd/datastore"
 	"github.com/gurbos/tcd/tcapi"
-	"github.com/joho/godotenv"
+	"github.com/jackc/pgx/v5/pgconn"
 )
+
+const CARD_IMAGE_DIR = "/home/gurbos/card_images/" // Directory to store card images
 
 func main() {
 
 	cmdFlags := initCmdFlags()
-
-	// Load environment variables from .env file
-	err := godotenv.Load()
-	if err != nil {
-		log.Fatal(err)
-	}
 
 	// Load DB credentials from environment variables
 	var creds DBCredentials
@@ -40,7 +36,7 @@ func main() {
 		if productLine == nil {
 			log.Fatalf("Product line '%s' not found", cmdFlags.product_line_name)
 		}
-		sets := tcapi.FetchSetsByProductLine(productLine.UrlName)
+		sets := tcapi.FetchSetsByProductLine(productLine.Name)
 
 		if cmdFlags.write_data {
 			pool, err := datastore.NewDBPool(context.Background(), config) // Create DB connection pool
@@ -52,54 +48,51 @@ func main() {
 
 			// Add Product Line to the database
 			productLine, err = store.AddProductLine(context.Background(), productLine)
-			if err != nil {
-				log.Fatal(fmt.Errorf("Error adding Product Line: %w", err))
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) {
+				switch pgErr.Code {
+				case datastore.UniqueViolationError:
+					*productLine, err = store.GetProductLineByName(context.Background(), productLine.UrlName)
+				default:
+					log.Fatal(fmt.Errorf("Error adding Product Line: %w", err))
+				}
 			}
 
 			// Associate sets with the product line and add to the database
 			associateSetsWithProductLine(sets, productLine.Id)
-			if _, err := store.AddSets(context.Background(), sets); err != nil {
-				log.Fatal(fmt.Errorf("Error adding sets: %w", err))
+
+			_, err = store.AddSets(context.Background(), sets)
+			if errors.As(err, &pgErr) {
+				switch pgErr.Code {
+				case datastore.UniqueViolationError:
+					// Sets already exist, proceed without error
+				default:
+					log.Fatal(fmt.Errorf("Error adding sets: %w", err))
+				}
 			}
 
 			// Initialize worker pool configuration struct and launch worker pool
-			maxProcs := runtime.GOMAXPROCS(0) / 2 // Determine number of workers to use
+			maxProcs := runtime.GOMAXPROCS(0) / 3 // Determine number of workers to use
 			wpConf := NewWorkerPoolConfig(
 				context.Background(),
-				maxProcs,
-				make(chan DataContext, maxProcs), // data context channel
-				make(chan Job, maxProcs),         // job channel
-				make(chan JobStatus, maxProcs),   // job status channel
+				maxProcs,                                   // pool size
+				make(chan DataContext, maxProcs*10),        // data context channel
+				make(chan Job, maxProcs*3),                 // job channel
+				make(chan JobStatus, maxProcs*3),           // job status channel
+				make(chan []datastore.Product, maxProcs*3), // image data request channel
 				store,
 			)
-			dataWaitGroup := &sync.WaitGroup{}
-			jobWaitGroup := &sync.WaitGroup{}
-			statusWaitGroup := &sync.WaitGroup{}
 
-			// Launch job workers
-			var i int
-			for i = 1; i <= wpConf.poolSize; i++ {
-				jobWaitGroup.Add(1)
-				go jobWorker(i, context.Background(), wpConf.jobChan, wpConf.jobStatChan, jobWaitGroup, store)
-			}
-
-			// Launch data context workers
-			var j int
-			for j = i; j <= wpConf.poolSize*2; j++ {
-				dataWaitGroup.Add(1)
-				go dataWorker(j, wpConf.ctx, wpConf.dataCtxChan, wpConf.jobChan, dataWaitGroup)
-			}
-
-			// Launch status worker
-			var k int
-			for k = j; k <= wpConf.poolSize*2+2; k++ {
-				statusWaitGroup.Add(1)
-				go statusWorker(k, wpConf.ctx, wpConf.jobStatChan, wpConf.jobChan, statusWaitGroup)
-			}
+			// Launch the worker pool
+			LaunchWorkerPool(wpConf)
 
 			// Send data contexts to data context channel
 			for _, set := range sets {
-				sParams := tcapi.NewSearchParams(productLine.UrlName, set.UrlName, "", 0, set.Count)
+				sParams := tcapi.NewSearchParams(
+					productLine.UrlName,
+					set.UrlName,
+					"Cards", 0,
+					set.Count)
 				dataCtx := DataContext{
 					searchParams: sParams,
 					set:          set,
@@ -108,12 +101,14 @@ func main() {
 				wpConf.dataCtxChan <- dataCtx // Send data context to data context channel
 			}
 
-			close(wpConf.dataCtxChan) // Close data context channel to signal data workers no more data contexts will be sent
-			dataWaitGroup.Wait()      // Wait for all data workers to finish
-			close(wpConf.jobChan)     // Close job channel to signal workers no more jobs will be sent
-			jobWaitGroup.Wait()       // Wait for all job workers to finish
-			close(wpConf.jobStatChan) // Close error channel to signal error worker no more errors will be sent
-			statusWaitGroup.Wait()    // Wait for status worker to finish
+			close(wpConf.dataCtxChan)     // Close data context channel to signal data workers no more data contexts will be sent
+			wpConf.dataWaitGroup.Wait()   // Wait for all data workers to finish
+			close(wpConf.jobsChan)        // Close job channel to signal workers no more jobs will be sent
+			wpConf.jobWaitGroup.Wait()    // Wait for all job workers to finish
+			close(wpConf.jobStatChan)     // Close error channel to signal error worker no more errors will be sent
+			wpConf.statusWaitGroup.Wait() // Wait for status worker to finish
+			close(wpConf.imgInfoChan)     // Close image info channel to signal image worker no more image requests will be sent
+			wpConf.imageWaitGroup.Wait()  // Wait for image worker to finish
 
 			os.Exit(0)
 		}

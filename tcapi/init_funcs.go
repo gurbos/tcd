@@ -9,13 +9,17 @@ import (
 	"net/http"
 )
 
-var PRODUCT_LINES_URL = "https://mp-search-api.tcgplayer.com/v1/search/productLines"
-var DATA_SEARCH_URL = "https://mp-search-api.tcgplayer.com/v1/search/request?q=&isList=false"
+const (
+	PRODUCT_LINES_URL   = "https://mp-search-api.tcgplayer.com/v1/search/productLines"
+	DATA_SEARCH_URL     = "https://mp-search-api.tcgplayer.com/v1/search/request?q=&isList=false"
+	BASE_IMAGE_URL      = "https://tcgplayer-cdn.tcgplayer.com/product/"
+	IMAGE_FORMAT_SUFFIX = "1000x1000.jpg"
 
-// Maximum number of product results returned by TCGPlayer API in a single response.
-// Used by FetchProductsInParts to limit number of products requested per API call to
-// FetchProducts.
-const MAX_RESULT_SIZE = 50
+	// Maximum number of product results returned by TCGPlayer API in a single response.
+	// Used by FetchProductsInParts to limit number of products requested per API call to
+	// FetchProducts.
+	MAX_RESULT_SIZE = 50
+)
 
 func InitRequest(method string, url string, body io.Reader) *http.Request {
 	req, err := http.NewRequest(method, url, body)
@@ -84,9 +88,7 @@ func InitRequestHeader(req *http.Request) {
 }
 
 // Return a SearchParams struct initialized with default values
-func NewSearchParams(productLine string, setName string,
-	productType string, from int, size int,
-) SearchParams {
+func NewSearchParams(productLine string, setName string, productType string, from int, size int) SearchParams {
 	params := SearchParams{
 		From:        from,
 		Size:        size,

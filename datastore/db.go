@@ -13,7 +13,7 @@ import (
 // Config creates pgxpool.Config with defualt settings provided
 // by the parameters.
 func Config(dsn string) *pgxpool.Config {
-	const defaultMaxConns = int32(4)
+	const defaultMaxConns = int32(8)
 	const defaultMinConns = int32(2)
 	const defaultMaxConnLifetime = time.Minute * 10
 	const defaultMaxIdletime = time.Minute * 5

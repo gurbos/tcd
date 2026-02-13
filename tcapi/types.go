@@ -1,12 +1,16 @@
 package tcapi
 
-import "github.com/gurbos/tcd/datastore"
+import (
+	"encoding/json"
+
+	"github.com/gurbos/tcd/datastore"
+)
 
 /*-------------------------------------------------------------------------------------------------*/
 
 type SearchCriteria struct {
 	Algorithm     string        `json:"algorithm"`
-	Context       context       `json:"context"`
+	Context       Context       `json:"context"`
 	Filters       filters       `json:"filters"`
 	From          int           `json:"from"`
 	ListingSearch listingSearch `json:"listingSearch"`
@@ -16,7 +20,7 @@ type SearchCriteria struct {
 }
 
 /******************************************************************/
-type context struct {
+type Context struct {
 	Cart            _cart        `json:"cart"`
 	ShippingCountry string       `json:"shippingCountry"`
 	UserProfile     _userProfile `json:"userProfile"`
@@ -103,8 +107,8 @@ type SearchResults struct {
 type Error struct{}
 
 type Results struct {
-	Aggregations aggregations        `json:"aggregations"`
-	Results      []datastore.Product `json:"results"`
+	Aggregations aggregations `json:"aggregations"`
+	Results      []Product    `json:"results"`
 }
 
 /******************************************************************/
@@ -122,6 +126,23 @@ type ValueType struct {
 	Name    string  `json:"value"`
 	UrlName string  `json:"urlValue"`
 	Count   float64 `json:"count"`
+}
+
+type Product struct {
+	ProductId          float64         `json:"productId"`
+	ProductLineName    string          `json:"productLineName"`
+	ProductLineUrlName string          `json:"productLineUrlName"`
+	ProductName        string          `json:"productName"`
+	ProductUrlName     string          `json:"productUrlName"`
+	CustomAttributes   json.RawMessage `json:"customAttributes"`
+	SetName            string          `json:"setName"`
+	SetUrlName         string          `json:"setUrlName"`
+	RarityName         string          `json:"rarityName"`
+	ProductNumber      string
+	PrintEdition       string
+	ReleaseDate        string
+	ProductLineId      int
+	SetId              int
 }
 
 /******************************************************************/

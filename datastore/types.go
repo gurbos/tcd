@@ -20,7 +20,7 @@ type Set struct {
 }
 
 type Product struct {
-	ProductId          int
+	ProductId          int             `json:"productId"`
 	ProductLineName    string          `json:"productLineName"`
 	ProductLineUrlName string          `json:"productLineUrlName"`
 	ProductName        string          `json:"productName"`

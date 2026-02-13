@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -27,11 +26,27 @@ type DBCredentials struct {
 
 // LoadCredentials loads database credentials from environment variables.
 func (cred *DBCredentials) LoadCredentials() {
-	cred.username = os.Getenv("USERNAME")
-	cred.password = os.Getenv("PASSWORD")
-	cred.host = os.Getenv("HOST")
-	cred.port = os.Getenv("PORT")
-	cred.dbName = os.Getenv("DB_NAME")
+	var found bool
+	cred.username, found = os.LookupEnv("USERNAME")
+	if !found {
+		log.Fatal("USERNAME environment variable not set")
+	}
+	cred.password, found = os.LookupEnv("PASSWORD")
+	if !found {
+		log.Fatal("PASSWORD environment variable not set")
+	}
+	cred.host, found = os.LookupEnv("HOST")
+	if !found {
+		log.Fatal("HOST environment variable not set")
+	}
+	cred.port, found = os.LookupEnv("PORT")
+	if !found {
+		log.Fatal("PORT environment variable not set")
+	}
+	cred.dbName, found = os.LookupEnv("DB_NAME")
+	if !found {
+		log.Fatal("DB_NAME environment variable not set")
+	}
 }
 
 // ConnectString constructs a PostgreSQL connection string from the credentials.
@@ -50,10 +65,10 @@ type ConnectStringer interface {
 func printLists(list []tcapi.ValueType) {
 	mid := len(list) / 2
 	for i := 0; i < mid; i++ {
-		fmt.Printf("%-4d : %-60s %-5s %-4d : %-60s\n", i, list[i].UrlName, "  ", i+mid, list[i+mid].UrlName)
+		fmt.Printf("%-4d : %-60s %-5s %-4d : %-60s\n", i, list[i].Name, "  ", i+mid, list[i+mid].Name)
 	}
 	if len(list)%2 != 0 {
-		fmt.Printf("%-65s%-60s\n", " ", list[len(list)-1].UrlName)
+		fmt.Printf("%-65s%-60s\n", " ", list[len(list)-1].Name)
 	}
 }
 
@@ -132,6 +147,16 @@ func removeProductByProductNumber(products []datastore.Product, number string) [
 	return filtered
 }
 
+// getProductIdByName retrieves the ProductId of a product by its name.
+func getProductIdByName(products []datastore.Product, name string) int {
+	for _, p := range products {
+		if p.ProductName == name {
+			return p.ProductId
+		}
+	}
+	return 0
+}
+
 // dataWorker fetches products, based search parameters sent via the data context channel, from
 // the TCGPlayer API, initializes a jobs with the fetched products, and sends the jobs, via the jobs channel,
 // to the job workers for processing.
@@ -144,9 +169,13 @@ func dataWorker(id int, ctx context.Context, dcChan <-chan DataContext, jobsChan
 			return
 		}
 		products := tcapi.FetchProductsInParts(dc.searchParams) // Fetch products based on search parameters
-		products = screenProducts(products)                     // Screen products to remove those without ProductNumber and duplicates
-		dc.UpdateSetCount(len(products))                        // Update set count with number of products after screening
-		dc.UpdateSearchResultsSize(len(products))               // Update set count with number of products after screening
+		if len(products) == 0 {
+			log.Printf("Data Worker %d: No products found for set '%s'. Skipping.\n", id, dc.set.Name)
+			continue
+		}
+		products = screenProducts(products)       // Screen products to remove those without ProductNumber and duplicates
+		dc.UpdateSetCount(len(products))          // Update set count with number of products after screening
+		dc.UpdateSearchResultsSize(len(products)) // Update set count with number of products after screening
 		assocProductsWithSetAndProductLine(products, dc.set.Id, dc.productLine.Id)
 		job := NewJob(dc.productLine, dc.set, products)
 		jobsChan <- job
@@ -181,10 +210,54 @@ func jobWorker(id int, ctx context.Context, jobsChan <-chan Job, statChan chan<-
 	}
 }
 
+// imageWorker fetches and stores images for products received via the jobs channel.
+func imageWorker(id int, ctx context.Context, imgIdChan chan []datastore.Product, wg *sync.WaitGroup, store UserDataStore) {
+	defer wg.Done()
+
+	// Fetch and store images for products from the image ID channel.
+	// Images are fetched using the product Id assigned by the TCGPlayer API,
+	// then renamed using the product id assigned by the user data store.
+	for {
+		prodList, open := <-imgIdChan
+		if open {
+			setName := prodList[0].SetName
+			products, err := store.GetProductsBySetName(ctx, setName) // Get list of products for the specified set from user data store
+			if err != nil {
+				log.Printf("Error fetching products for set %s: %v\n", setName, err)
+				continue
+			}
+
+			// Fetch and store images for each product in the job using the product Id from user data store
+			imgFiles := make(map[string][]byte) // Map to hold image file data
+			for _, elem := range prodList {
+				imgData, err := tcapi.FetchProductImageById(ctx, elem.ProductId) // Fetch product image by product Id
+				if err != nil {
+					log.Printf("Error fetching image for product %s: %v\n", elem.ProductName, err)
+					continue
+				}
+				id := getProductIdByName(products, elem.ProductName)                                 // Get product Id from product list from user data store
+				fileName := fmt.Sprintf("%s%d_in_%s", CARD_IMAGE_DIR, id, tcapi.IMAGE_FORMAT_SUFFIX) // Construct file name using product Id
+				imgFiles[fileName] = imgData                                                         // Store image data in map
+			}
+			for fileName, imgData := range imgFiles {
+				err = os.WriteFile(fileName, imgData, 0644) // Save image data to file
+				if err != nil {
+					log.Printf("Error saving image in set %s: %v\n", setName, err)
+				}
+			}
+		} else {
+			break // Exit loop if image ID channel is closed
+		}
+	}
+	// Print log message and exit when image Id channel is closed.
+	fmt.Printf("Images Worker %d: No more images to fetch. Exiting.\n", id)
+}
+
 // statusWorker process job statuses, received via the job status channel, and handles them accordingly.
 // It prints successful job information and re-queues failed jobs after removing the problematic product.
 // (will handle TCGPlayer API fetch errors in the future)
-func statusWorker(id int, ctx context.Context, jobStatChan <-chan JobStatus, jobChan chan<- Job, wg *sync.WaitGroup) {
+func statusWorker(id int, ctx context.Context, jobStatChan <-chan JobStatus,
+	jobChan chan<- Job, imgInfoChan chan<- []datastore.Product, wg *sync.WaitGroup) {
 	defer wg.Done()
 	// Process job statuses from the job status channel
 	for {
@@ -196,22 +269,18 @@ func statusWorker(id int, ctx context.Context, jobStatChan <-chan JobStatus, job
 
 		set := status.job.set
 		if status.success {
-			fmt.Printf("%-5d %-70s %-5d  Worker: %d\n", set.Id, set.Name, set.Count, status.worker)
+			fmt.Printf("%-5d %-70s %-5d\n", set.Id, set.Name, set.Count)
+			imgInfoChan <- status.job.productList // Send product list to image data channel for image fetching
 		} else {
 			var pgErr *pgconn.PgError
 			if errors.As(status.err, &pgErr) {
-				errCode, err := strconv.Atoi(pgErr.Code)
-				if err != nil {
-					log.Printf("Error converting error code to int: %v\n", err)
-					continue
-				}
-				switch errCode {
-				case 23505:
+				switch pgErr.Code {
+				case datastore.UniqueViolationError:
 					duplicateKey := getDuplicateKey(pgErr.Detail)                                               // Extract duplicate key from error detail
 					status.job.productList = removeProductByProductNumber(status.job.productList, duplicateKey) // Remove duplicate product
 					jobChan <- status.job                                                                       // Re-queue job after removing duplicate product
 				default:
-					log.Printf("Unhandled Postgres error code %d for set %s: %v\n", errCode, status.job.productList[0].SetName, status.err)
+					log.Printf("Unhandled Postgres error code %s for set %s: %v\n", pgErr.Code, status.job.productList[0].SetName, status.err)
 
 				}
 			}
@@ -261,39 +330,61 @@ type JobStatus struct {
 }
 
 // LaunchWorkerPool initializes and starts the worker pool (job workers, status worker, and data workers)
-func LaunchWorkerPool(workerPoolConfig *WorkerPoolConfig) {
-	/*var i int
-	for i = 1; i <= workerPoolConfig.poolSize; i++ {
-		workerPoolConfig.wg.Add(1)
-		go jobWorker(
-			i,
-			workerPoolConfig.ctx,
-			workerPoolConfig.jobChan,
-			workerPoolConfig.jobStatChan,
-			workerPoolConfig.wg,
-			workerPoolConfig.store,
-		)
-	}*/
+func LaunchWorkerPool(wpConfig *WorkerPoolConfig) {
+	// Launch job workers
+	for i := 1; i <= wpConfig.poolSize; i++ {
+		wpConfig.jobWaitGroup.Add(1)
+		go jobWorker(i, context.Background(), wpConfig.jobsChan, wpConfig.jobStatChan, wpConfig.jobWaitGroup, wpConfig.store)
+	}
+
+	// Launch data context workers
+	for j := 1; j <= wpConfig.poolSize; j++ {
+		wpConfig.dataWaitGroup.Add(1)
+		go dataWorker(j, wpConfig.ctx, wpConfig.dataCtxChan, wpConfig.jobsChan, wpConfig.dataWaitGroup)
+	}
+
+	// Launch status worker
+	for k := 1; k <= wpConfig.poolSize; k++ {
+		wpConfig.statusWaitGroup.Add(1)
+		go statusWorker(k, wpConfig.ctx, wpConfig.jobStatChan, wpConfig.jobsChan, wpConfig.imgInfoChan, wpConfig.statusWaitGroup)
+	}
+
+	// Launch image worker
+	for l := 1; l <= wpConfig.poolSize+2; l++ {
+		wpConfig.imageWaitGroup.Add(1)
+		go imageWorker(l, wpConfig.ctx, wpConfig.imgInfoChan, wpConfig.imageWaitGroup, wpConfig.store)
+	}
 }
 
 // WorkerPoolConfig holds configuration for the worker pool
 type WorkerPoolConfig struct {
-	ctx         context.Context
-	poolSize    int
-	dataCtxChan chan DataContext // Channel for data contexts
-	jobChan     chan Job         // Channel for jobs to be processed
-	jobStatChan chan JobStatus   // Channel for job statuses
-	store       UserDataStore
+	ctx             context.Context
+	poolSize        int
+	dataCtxChan     chan DataContext         // Channel for data contexts
+	jobsChan        chan Job                 // Channel for jobs to be processed
+	jobStatChan     chan JobStatus           // Channel for job statuses
+	imgInfoChan     chan []datastore.Product // Channel for image data requests
+	store           UserDataStore
+	dataWaitGroup   *sync.WaitGroup
+	jobWaitGroup    *sync.WaitGroup
+	statusWaitGroup *sync.WaitGroup
+	imageWaitGroup  *sync.WaitGroup
 }
 
 func NewWorkerPoolConfig(ctx context.Context, poolSize int, dataCtxChan chan DataContext, jobChan chan Job,
-	jobStatusChan chan JobStatus, s UserDataStore) *WorkerPoolConfig {
+	jobStatusChan chan JobStatus, imgInfoChan chan []datastore.Product, store UserDataStore) *WorkerPoolConfig {
 	return &WorkerPoolConfig{
-		poolSize:    poolSize,
-		dataCtxChan: dataCtxChan,
-		jobChan:     jobChan,
-		jobStatChan: jobStatusChan,
-		store:       s,
+		ctx:             ctx,
+		poolSize:        poolSize,
+		dataCtxChan:     dataCtxChan,
+		jobsChan:        jobChan,
+		jobStatChan:     jobStatusChan,
+		imgInfoChan:     imgInfoChan,
+		store:           store,
+		dataWaitGroup:   &sync.WaitGroup{},
+		jobWaitGroup:    &sync.WaitGroup{},
+		statusWaitGroup: &sync.WaitGroup{},
+		imageWaitGroup:  &sync.WaitGroup{},
 	}
 }
 
