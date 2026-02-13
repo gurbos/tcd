@@ -18,4 +18,5 @@ type UserDataStore interface {
 	AddProductLine(ctx context.Context, pl *datastore.Product_Line) (*datastore.Product_Line, error)
 	AddSets(ctx context.Context, sets []ds.Set) ([]datastore.Set, error)
 	AddProducts(ctx context.Context, products []datastore.Product) error
+	AddSetData(ctx context.Context, set *datastore.Set, products []datastore.Product) error
 }

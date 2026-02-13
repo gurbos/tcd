@@ -145,6 +145,7 @@ func (r *PostgresDataStore) GetProductsBySetName(ctx context.Context, setName st
 	return products, nil
 }
 
+// AddProductLine adds a new product line to the database and returns the added product line with its assigned ID.
 func (r *PostgresDataStore) AddProductLine(ctx context.Context, pl *Product_Line) (*Product_Line, error) {
 	c, err := r.cp.Acquire(ctx)
 	if err != nil {
@@ -256,6 +257,62 @@ func (r *PostgresDataStore) AddProducts(ctx context.Context, products []Product)
 
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("Error committing DB transaction: %w", err)
+	}
+
+	return nil
+}
+
+func (r *PostgresDataStore) AddSetData(ctx context.Context, set *Set, products []Product) error {
+	txOptions := pgx.TxOptions{
+		IsoLevel: pgx.Serializable,
+	}
+	tx, err := r.cp.BeginTx(ctx, txOptions)
+	if err != nil {
+		return fmt.Errorf("Error beginning DB transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	setSql := "INSERT INTO sets (set_name, set_url_name, card_count, release_date, product_line_id) " +
+		"VALUES ($1, $2, $3, $4, $5);"
+
+	_, execErr := tx.Exec(ctx, setSql, set.Name, set.UrlName, set.Count, set.ReleaseDate, set.ProductLineId)
+	if execErr != nil {
+		return fmt.Errorf("Error inserting set info for set %s in AddSetData(): %w", set.Name, execErr)
+	}
+
+	productSql := "INSERT INTO products (product_name, product_url_name, product_line_name, " +
+		"product_line_url_name, rarity_name, custom_attributes, set_name, set_url_name, " +
+		"product_number, print_edition, release_date, product_line_id, set_id) " +
+		"VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13);"
+
+	batch := &pgx.Batch{} // Create a new batch for batch execution
+
+	for _, p := range products {
+		batch.Queue(
+			productSql,
+			p.ProductName, p.ProductUrlName, p.ProductLineName,
+			p.ProductLineUrlName, p.RarityName, p.CustomAttributes,
+			p.SetName, p.SetUrlName, p.ProductNumber, p.PrintEdition,
+			p.ReleaseDate, p.ProductLineId, p.SetId,
+		)
+	}
+
+	br := tx.SendBatch(ctx, batch)
+	defer br.Close()
+
+	for i := 0; i < batch.Len(); i++ {
+		_, brErr := br.Exec()
+		if brErr != nil {
+			return fmt.Errorf("Error inserting products for set %s in AddSetData(): %w", set.Name, brErr)
+		}
+	}
+
+	if err := br.Close(); err != nil {
+		return fmt.Errorf("Error closing batch results in AddSetData(): %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("Error committing DB transaction in AddSetData(): %w", err)
 	}
 
 	return nil

@@ -32,11 +32,10 @@ func main() {
 	}
 
 	if cmdFlags.product_line_name != "" {
-		productLine := tcapi.FetchProductLineByName(cmdFlags.product_line_name)
+		productLine := tcapi.FetchProductLineByName(cmdFlags.product_line_name) // Fetch product line info by name
 		if productLine == nil {
 			log.Fatalf("Product line '%s' not found", cmdFlags.product_line_name)
 		}
-		sets := tcapi.FetchSetsByProductLine(productLine.Name)
 
 		if cmdFlags.write_data {
 			pool, err := datastore.NewDBPool(context.Background(), config) // Create DB connection pool
@@ -58,19 +57,6 @@ func main() {
 				}
 			}
 
-			// Associate sets with the product line and add to the database
-			associateSetsWithProductLine(sets, productLine.Id)
-
-			_, err = store.AddSets(context.Background(), sets)
-			if errors.As(err, &pgErr) {
-				switch pgErr.Code {
-				case datastore.UniqueViolationError:
-					// Sets already exist, proceed without error
-				default:
-					log.Fatal(fmt.Errorf("Error adding sets: %w", err))
-				}
-			}
-
 			// Initialize worker pool configuration struct and launch worker pool
 			maxProcs := runtime.GOMAXPROCS(0) / 3 // Determine number of workers to use
 			wpConf := NewWorkerPoolConfig(
@@ -82,6 +68,11 @@ func main() {
 				make(chan []datastore.Product, maxProcs*3), // image data request channel
 				store,
 			)
+
+			sets := tcapi.FetchSetsByProductLine(productLine.UrlName) // Fetch sets for the product line
+
+			// Associate sets with the product line and add to the database
+			associateSetsWithProductLine(sets, productLine.Id)
 
 			// Launch the worker pool
 			LaunchWorkerPool(wpConf)

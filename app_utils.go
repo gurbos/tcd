@@ -196,8 +196,8 @@ func jobWorker(id int, ctx context.Context, jobsChan <-chan Job, statChan chan<-
 			return
 		}
 
-		jobStatus := JobStatus{job: job}               // Initialize job status
-		err := store.AddProducts(ctx, job.productList) // attempt to add products to the database
+		jobStatus := JobStatus{job: job}                        // Initialize job status
+		err := store.AddSetData(ctx, &job.set, job.productList) // attempt to add products to the database
 		if err != nil {
 			jobStatus.success = false // Mark job as failed
 		} else {
