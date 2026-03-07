@@ -22,7 +22,7 @@ func (r *PostgresDataStore) GetProductLineByName(ctx context.Context, name strin
 	defer c.Release()
 
 	row := c.QueryRow(ctx,
-		"SELECT product_line_id, product_line_name, product_line_url_name FROM product_lines WHERE product_line_name=$1;", name,
+		"SELECT product_line_id, product_line_name, product_line_url_name FROM product_lines WHERE product_line_url_name=$1;", name,
 	)
 
 	if err := row.Scan(&productLine.Id, &productLine.Name, &productLine.UrlName); err != nil {
@@ -32,7 +32,7 @@ func (r *PostgresDataStore) GetProductLineByName(ctx context.Context, name strin
 	return productLine, nil
 }
 
-func (r *PostgresDataStore) GetSetsByProductLineName(ctx context.Context, name string) ([]Set, error) {
+func (r *PostgresDataStore) GetSetsByProductLineId(ctx context.Context, ProductLineId int) ([]Set, error) {
 	// Begin a transaction with serializable isolation level
 	// which guarantees a fully consistent view of database state
 	// throughout the transaction, preventing concurrency anomolies.
@@ -52,10 +52,10 @@ func (r *PostgresDataStore) GetSetsByProductLineName(ctx context.Context, name s
 	}
 
 	// Query sets by product line name
-	sql := "SELECT * FROM sets WHERE product_line_name=$1;"
-	rows, err := tx.Query(ctx, sql, name)
+	sql := "SELECT * FROM sets WHERE product_line_id=$1;"
+	rows, err := tx.Query(ctx, sql, ProductLineId)
 	if err != nil {
-		return nil, fmt.Errorf("Error querying sets by product line name %s: %w\n", name, err)
+		return nil, fmt.Errorf("Error querying sets by product line id %d: %w\n", ProductLineId, err)
 	}
 
 	// Scan rows into set list
@@ -65,18 +65,19 @@ func (r *PostgresDataStore) GetSetsByProductLineName(ctx context.Context, name s
 			break
 		}
 		s := &sets[i]
-		err := rows.Scan(s.Id, s.Name, s.UrlName, s.Count)
+		err := rows.Scan(&s.Id, &s.Name, &s.UrlName, &s.Count, &s.ReleaseDate, &s.ProductLineId)
 		if err != nil {
-			return nil, fmt.Errorf("Error scanning set rows for product line name %s: %w\n", name, err)
+			return nil, fmt.Errorf("Error scanning set rows for product line id %d: %w\n", ProductLineId, err)
 		}
 	}
 	// Check if loop ended due to errer or end of rows
 	if rows.Err() != nil {
-		return nil, fmt.Errorf("Error iterating through set rows for product line name %s: %w\n", name, err)
+		return nil, fmt.Errorf("Error iterating through set rows for product line id %d: %w\n", ProductLineId, err)
 	}
+	rows.Close()
 
 	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("Error commiting query read operations of sets for product line '%s': %w", name, err)
+		return nil, fmt.Errorf("Error commiting query read operations of sets for product line id %d: %w", ProductLineId, err)
 	}
 
 	return sets, nil

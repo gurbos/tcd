@@ -398,3 +398,36 @@ func getDuplicateKey(errDetail string) string {
 	}
 	return number
 }
+
+// getSetsNotInDatastore compares sets fetched from the TCGPlayer API with sets in the user data store for a given
+// product line and returns a list of sets that are present in the TCGPlayer API but not in the user data store.
+func getSetsNotInDatastore(pl *datastore.Product_Line, store UserDataStore) ([]datastore.Set, error) {
+	tcapiSets := tcapi.FetchSetsByProductLine(pl.UrlName) // Fetch sets for the product line
+	setMap := make(map[string]datastore.Set)
+
+	// Populate map with sets from the TCGPlayer API, using UrlName as the key for easy lookup
+	for _, val := range tcapiSets {
+		setMap[val.UrlName] = val
+	}
+	dbSets, err := store.GetSetsByProductLineId(context.Background(), pl.Id) // Fetch sets for the product line from the database
+	if err != nil {
+		return nil, fmt.Errorf("Error fetching sets from database: %w", err)
+	}
+
+	// Loop through sets from the database and remove any matching sets from the map of sets from the TCGPlayer API
+	for _, elem := range dbSets {
+		_, exists := setMap[elem.UrlName]
+		if exists {
+			delete(setMap, elem.UrlName)
+		}
+	}
+
+	sets := make([]datastore.Set, len(setMap)) // Create slice to hold sets that are in the TCGPlayer API but not in the database
+	i := 0
+	for _, val := range setMap {
+		sets[i] = val
+		i++
+	}
+
+	return sets, nil
+}

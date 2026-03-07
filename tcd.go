@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"strings"
 
 	"github.com/gurbos/tcd/datastore"
 	"github.com/gurbos/tcd/tcapi"
@@ -32,7 +33,7 @@ func main() {
 	}
 
 	if cmdFlags.product_line_name != "" {
-		productLine := tcapi.FetchProductLineByName(cmdFlags.product_line_name) // Fetch product line info by name
+		productLine := tcapi.FetchProductLineByName(strings.ToLower(cmdFlags.product_line_name)) // Fetch product line info by name
 		if productLine == nil {
 			log.Fatalf("Product line '%s' not found", cmdFlags.product_line_name)
 		}
@@ -69,7 +70,16 @@ func main() {
 				store,
 			)
 
-			sets := tcapi.FetchSetsByProductLine(productLine.UrlName) // Fetch sets for the product line
+			sets, err := getSetsNotInDatastore(productLine, store)
+			if err != nil {
+				log.Fatal(fmt.Errorf("Error fetching sets for product line '%s': %w", productLine.Name, err))
+			}
+
+			// If no new sets are found, log a message and exit the program
+			if len(sets) == 0 {
+				log.Printf("No new sets found for product line '%s', exiting program.", productLine.Name)
+				os.Exit(0)
+			}
 
 			// Associate sets with the product line and add to the database
 			associateSetsWithProductLine(sets, productLine.Id)
