@@ -10,6 +10,11 @@ import (
 	pgxp "github.com/jackc/pgx/v5/pgxpool"
 )
 
+const (
+	UniqueViolationError      = "23505"
+	SerializationFailureError = "40001"
+)
+
 // Config creates pgxpool.Config with defualt settings provided
 // by the parameters.
 func Config(dsn string) *pgxpool.Config {

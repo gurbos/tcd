@@ -101,6 +101,7 @@ func main() {
 			close(wpConf.imgInfoChan)     // Close image info channel to signal image worker no more image requests will be sent
 			wpConf.imageWaitGroup.Wait()  // Wait for image worker to finish
 
+			fmt.Println("All workers finished, exiting program.")
 			os.Exit(0)
 		}
 

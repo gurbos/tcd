@@ -165,12 +165,12 @@ func dataWorker(id int, ctx context.Context, dcChan <-chan DataContext, jobsChan
 	for {
 		dc, open := <-dcChan
 		if !open {
-			log.Printf("Data Worker %d: No more data contexts to process. Exiting.\n", id)
+			//fmt.Printf("\nData Worker %d: No more data contexts to process. Exiting.\n\n", id)
 			return
 		}
 		products := tcapi.FetchProductsInParts(dc.searchParams) // Fetch products based on search parameters
 		if len(products) == 0 {
-			log.Printf("Data Worker %d: No products found for set '%s'. Skipping.\n", id, dc.set.Name)
+			fmt.Printf("\nData Worker %d: No products found for set '%s'. Skipping.\n\n", id, dc.set.Name)
 			continue
 		}
 		products = screenProducts(products)       // Screen products to remove those without ProductNumber and duplicates
@@ -192,17 +192,16 @@ func jobWorker(id int, ctx context.Context, jobsChan <-chan Job, statChan chan<-
 		job, open := <-jobsChan
 		// End worker if jobs channel is closed
 		if !open {
-			log.Printf("Job Worker %d: No more jobs to process. Exiting.\n", id)
+			//fmt.Printf("Job Worker %d: No more jobs to process. Exiting.\n", id)
 			return
 		}
 
-		jobStatus := JobStatus{job: job}                        // Initialize job status
-		err := store.AddSetData(ctx, &job.set, job.productList) // attempt to add products to the database
+		jobStatus := JobStatus{job: &job}                      // Initialize job status
+		err := store.AddSetData(ctx, job.set, job.productList) // attempt to add products to the database
 		if err != nil {
 			jobStatus.success = false // Mark job as failed
 		} else {
 			jobStatus.success = true // Mark job as successful
-			//log.Printf("%-4d %-40s\n", job.set.Count, job.set.Name)
 		}
 		jobStatus.err = err // Record any error encountered
 		jobStatus.worker = id
@@ -250,7 +249,7 @@ func imageWorker(id int, ctx context.Context, imgIdChan chan []datastore.Product
 		}
 	}
 	// Print log message and exit when image Id channel is closed.
-	fmt.Printf("Images Worker %d: No more images to fetch. Exiting.\n", id)
+	//fmt.Printf("Images Worker %d: No more images to fetch. Exiting.\n", id)
 }
 
 // statusWorker process job statuses, received via the job status channel, and handles them accordingly.
@@ -263,7 +262,7 @@ func statusWorker(id int, ctx context.Context, jobStatChan <-chan JobStatus,
 	for {
 		status, open := <-jobStatChan
 		if !open {
-			log.Printf("Status Worker %d: No more job statuses to process. Exiting.\n", id)
+			//fmt.Printf("Status Worker %d: No more job statuses to process. Exiting.\n", id)
 			return
 		}
 
@@ -278,9 +277,11 @@ func statusWorker(id int, ctx context.Context, jobStatChan <-chan JobStatus,
 				case datastore.UniqueViolationError:
 					duplicateKey := getDuplicateKey(pgErr.Detail)                                               // Extract duplicate key from error detail
 					status.job.productList = removeProductByProductNumber(status.job.productList, duplicateKey) // Remove duplicate product
-					jobChan <- status.job                                                                       // Re-queue job after removing duplicate product
+					jobChan <- *status.job
+				case datastore.SerializationFailureError:
+					jobChan <- *status.job // Re-queue job for retry
 				default:
-					log.Printf("Unhandled Postgres error code %s for set %s: %v\n", pgErr.Code, status.job.productList[0].SetName, status.err)
+					fmt.Printf("\nUnhandled Postgres error code %s for set %s: %v\n\n", pgErr.Code, status.job.productList[0].SetName, status.err)
 
 				}
 			}
@@ -292,8 +293,8 @@ func statusWorker(id int, ctx context.Context, jobStatChan <-chan JobStatus,
 // newJob creates a new Job instance
 func NewJob(productLine datastore.Product_Line, set datastore.Set, products []datastore.Product) Job {
 	return Job{
-		productLine: productLine,
-		set:         set,
+		productLine: &productLine,
+		set:         &set,
 		productList: products,
 	}
 }
@@ -316,8 +317,8 @@ func (dc *DataContext) UpdateSearchResultsSize(size int) {
 
 // Job represents a job to be processed by a worker
 type Job struct {
-	productLine datastore.Product_Line
-	set         datastore.Set
+	productLine *datastore.Product_Line
+	set         *datastore.Set
 	productList []datastore.Product
 }
 
@@ -326,7 +327,7 @@ type JobStatus struct {
 	success bool
 	err     error
 	worker  int
-	job     Job
+	job     *Job
 }
 
 // LaunchWorkerPool initializes and starts the worker pool (job workers, status worker, and data workers)

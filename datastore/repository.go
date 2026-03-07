@@ -8,10 +8,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const (
-	UniqueViolationError = "23505"
-)
-
 type PostgresDataStore struct {
 	cp *pgxpool.Pool // Connection pool to the PostgreSQL database
 }
@@ -273,11 +269,11 @@ func (r *PostgresDataStore) AddSetData(ctx context.Context, set *Set, products [
 	defer tx.Rollback(ctx)
 
 	setSql := "INSERT INTO sets (set_name, set_url_name, card_count, release_date, product_line_id) " +
-		"VALUES ($1, $2, $3, $4, $5);"
+		"VALUES ($1, $2, $3, $4, $5) RETURNING set_id;"
 
-	_, execErr := tx.Exec(ctx, setSql, set.Name, set.UrlName, set.Count, set.ReleaseDate, set.ProductLineId)
-	if execErr != nil {
-		return fmt.Errorf("Error inserting set info for set %s in AddSetData(): %w", set.Name, execErr)
+	row := tx.QueryRow(ctx, setSql, set.Name, set.UrlName, set.Count, set.ReleaseDate, set.ProductLineId)
+	if err := row.Scan(&set.Id); err != nil {
+		return fmt.Errorf("Error inserting set '%s' in AddSetData(): %w", set.Name, err)
 	}
 
 	productSql := "INSERT INTO products (product_name, product_url_name, product_line_name, " +
@@ -293,7 +289,7 @@ func (r *PostgresDataStore) AddSetData(ctx context.Context, set *Set, products [
 			p.ProductName, p.ProductUrlName, p.ProductLineName,
 			p.ProductLineUrlName, p.RarityName, p.CustomAttributes,
 			p.SetName, p.SetUrlName, p.ProductNumber, p.PrintEdition,
-			p.ReleaseDate, p.ProductLineId, p.SetId,
+			p.ReleaseDate, p.ProductLineId, set.Id,
 		)
 	}
 

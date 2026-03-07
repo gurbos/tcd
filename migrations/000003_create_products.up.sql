@@ -5,7 +5,7 @@ CREATE TABLE  products (
     product_line_name VARCHAR(100) NOT NULL,
     product_line_url_name VARCHAR(100) NOT NULL,
     rarity_name VARCHAR(50) NOT NULL,
-    custom_attributes TEXT NOT NULL,
+    custom_attributes JSONB NOT NULL,
     set_name VARCHAR(100) NOT NULL,
     set_url_name VARCHAR(100) NOT NULL,
     product_number VARCHAR(30) NOT NULL,
